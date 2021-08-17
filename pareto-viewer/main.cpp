@@ -1,7 +1,12 @@
 // STL
+#include <array>
+#include <cmath>
+#include <fstream>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 //
 // glbinding handles the OpenGL
 // inclusion and extension loading.
@@ -34,15 +39,7 @@ namespace application {
 // Default Window Parameters
 int screen_width = 500;
 int screen_height = 500;
-const char* window_title = "OpenGL Test";
-
-// Structure and vertex data for the triangle to be rendered.
-static const struct {
-  float x, y;     // 2D Position
-  float r, g, b;  // Color
-} vertices[3] = {{-0.6f, -0.4f, 1.f, 0.f, 0.f},
-                 {0.6f, -0.4f, 0.f, 1.f, 0.f},
-                 {0.f, 0.6f, 0.f, 0.f, 1.f}};
+const char* window_title = "VIPO: Pareto Frontier Viewer";
 
 // Vertex and fragment shader source code.
 // We do not need newline characters at every line ending
@@ -52,18 +49,14 @@ static const struct {
 const char* vertex_shader_text =
     "#version 330 core\n"
     "uniform mat4 MVP;"
-    "attribute vec3 vCol;"
-    "attribute vec2 vPos;"
-    "varying vec3 color;"
+    "in vec3 vPos;"
     "void main(){"
-    "  gl_Position = MVP * vec4(vPos, 0.0, 1.0);"
-    "  color = vCol;"
+    "  gl_Position = MVP * vec4(vPos, 1.0);"
     "}";
 const char* fragment_shader_text =
     "#version 330 core\n"
-    "varying vec3 color;"
     "void main(){"
-    "  gl_FragColor = vec4(color, 1.0);"
+    "  gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);"
     "}";
 
 // Initialize the application.
@@ -81,7 +74,82 @@ void free();
 
 }  // namespace application
 
-int main() {
+glm::vec3 up{0, 0, 1};
+glm::vec3 origin{0, 0, 0};
+float fov = 45.0f;
+float radius = 5.0f;
+float altitude = 0.0f;
+float azimuth = 0.0f;
+vector<glm::vec3> vertices{};
+vector<pair<uint32_t, uint32_t>> edges{};
+array<glm::vec3, 8> aabb_vertices{};
+array<pair<uint32_t, uint32_t>, 12> aabb_edges{
+    pair{0, 2},  // x
+    {0, 4},      // y
+    {0, 1},      // z
+    {1, 3},     {3, 2}, {5, 7}, {7, 6}, {6, 4}, {4, 5}, {1, 5}, {3, 7}, {2, 6}};
+
+glm::mat4 model{1.0f};
+
+int main(int argc, char** argv) {
+  if (argc != 2) {
+    cout << "usage:\n" << argv[0] << " <pareto frontier file>\n";
+    return -1;
+  }
+
+  fstream file{argv[1], ios::in};
+  if (!file.is_open()) {
+    cerr << "Failed to open file '" << argv[1] << "' for reading.\n";
+    return -1;
+  }
+
+  // Parse Pareto frontier of given file.
+  string line;
+  while (getline(file, line)) {
+    if (line.empty()) continue;
+    stringstream stream{line};
+    string command;
+    stream >> command;
+    if (command == "v") {
+      glm::vec3 v;
+      stream >> v.x;
+      stream >> v.y;
+      stream >> v.z;
+      vertices.push_back(v);
+    } else if (command == "l") {
+      pair<uint32_t, uint32_t> e;
+      stream >> e.first;
+      stream >> e.second;
+      edges.push_back(e);
+    } else {
+      cerr << "Failed to parse given file. Command '" << command
+           << "' is unknown.\n";
+      return -1;
+    }
+  }
+
+  // Compute AABB of Pareto frontier and
+  // initialize default origin and radius.
+  glm::vec3 aabb_min{vertices[0]};
+  glm::vec3 aabb_max{vertices[0]};
+  for (size_t i = 2; i < vertices.size(); i += 2) {
+    aabb_min = min(aabb_min, vertices[i]);
+    aabb_max = max(aabb_max, vertices[i]);
+  }
+  aabb_vertices[0] = aabb_min;
+  aabb_vertices[1] = {aabb_min.x, aabb_min.y, aabb_max.z};
+  aabb_vertices[2] = {aabb_max.x, aabb_min.y, aabb_min.z};
+  aabb_vertices[3] = {aabb_max.x, aabb_min.y, aabb_max.z};
+  aabb_vertices[4] = {aabb_min.x, aabb_max.y, aabb_min.z};
+  aabb_vertices[5] = {aabb_min.x, aabb_max.y, aabb_max.z};
+  aabb_vertices[6] = {aabb_max.x, aabb_max.y, aabb_min.z};
+  aabb_vertices[7] = aabb_max;
+  // origin = 0.5f * (aabb_max + aabb_min);
+  // radius = 0.5f * length(aabb_max - aabb_min) *
+  //          (1.0f / tan(0.5f * fov * M_PI / 180.0f));
+  model = glm::scale(model, 1.0f / (0.5f * (aabb_max - aabb_min)));
+  model = glm::translate(model, -0.5f * (aabb_max + aabb_min));
+
   // Initialize the application.
   // Is automatically called by application::run()
   // but can be called manually.
@@ -112,11 +180,19 @@ bool is_initialized = false;
 // Vertex Data Handles
 GLuint vertex_array;
 GLuint vertex_buffer;
+GLuint element_buffer;
+// AABB Handles
+GLuint aabb_vertex_array;
+GLuint aabb_vertex_buffer;
+GLuint aabb_element_buffer;
 // Shader Handles
 GLuint program;
 GLint mvp_location, vpos_location, vcol_location;
 // Transformation Matrices
-glm::mat4 model, view, projection;
+glm::mat4 view, projection;
+// UI
+glm::vec2 old_mouse_pos{};
+glm::vec2 mouse_pos{};
 
 // RAII Destructor Simulator
 // To make sure that the application::free function
@@ -163,7 +239,6 @@ void init() {
 
   // Update private state.
   is_initialized = true;
-  cout << "Created OpenGL test application without errors!" << endl;
 }
 
 void free() {
@@ -173,6 +248,7 @@ void free() {
   if (!is_initialized) return;
 
   // Delete vertex data.
+  glDeleteBuffers(1, &element_buffer);
   glDeleteBuffers(1, &vertex_buffer);
   glDeleteVertexArrays(1, &vertex_array);
   // Delete shader program.
@@ -183,7 +259,6 @@ void free() {
 
   // Update private state.
   is_initialized = false;
-  cout << "Destroyed OpenGL test application without errors!" << endl;
 }
 
 void run() {
@@ -223,6 +298,8 @@ void init_window() {
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
   // Force GLFW to use the core profile of OpenGL.
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+  // Set up anti-aliasing.
+  glfwWindowHint(GLFW_SAMPLES, 4);
 
   // Create the window to render in.
   window = glfwCreateWindow(screen_width, screen_height, window_title,  //
@@ -238,6 +315,11 @@ void init_window() {
                                 int action, int mods) {
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
       glfwSetWindowShouldClose(window, GLFW_TRUE);
+  });
+
+  // Add zooming when scrolling.
+  glfwSetScrollCallback(window, [](GLFWwindow* window, double x, double y) {
+    radius *= exp(-0.1f * float(y));
   });
 
   // Add resize handler.
@@ -305,7 +387,9 @@ void init_shader() {
   // to change their values from the outside.
   mvp_location = glGetUniformLocation(program, "MVP");
   vpos_location = glGetAttribLocation(program, "vPos");
-  vcol_location = glGetAttribLocation(program, "vCol");
+
+  glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
+  glEnable(GL_DEPTH_TEST);
 }
 
 void init_vertex_data() {
@@ -318,16 +402,50 @@ void init_vertex_data() {
   glGenBuffers(1, &vertex_buffer);
   glBindBuffer(GL_ARRAY_BUFFER, vertex_buffer);
   // The data is not changing rapidly. Therefore we use GL_STATIC_DRAW.
-  glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+  glBufferData(GL_ARRAY_BUFFER,
+               vertices.size() * sizeof(decltype(vertices)::value_type),
+               vertices.data(), GL_STATIC_DRAW);
 
   // Set the data layout of the position and colors
   // with vertex attribute pointers.
   glEnableVertexAttribArray(vpos_location);
-  glVertexAttribPointer(vpos_location, 2, GL_FLOAT, GL_FALSE,
-                        sizeof(vertices[0]), (void*)0);
-  glEnableVertexAttribArray(vcol_location);
-  glVertexAttribPointer(vcol_location, 3, GL_FLOAT, GL_FALSE,
-                        sizeof(vertices[0]), (void*)(sizeof(float) * 2));
+  glVertexAttribPointer(vpos_location, 3, GL_FLOAT, GL_FALSE,
+                        sizeof(decltype(vertices)::value_type), (void*)0);
+
+  // Generate buffer for triangle data.
+  glGenBuffers(1, &element_buffer);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, element_buffer);
+  glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+               edges.size() * sizeof(decltype(edges)::value_type), edges.data(),
+               GL_STATIC_DRAW);
+
+  // Do the same for the AABB.
+  // Use a vertex array to be able to reference the vertex buffer and
+  // the vertex attribute arrays of the triangle with one single variable.
+  glGenVertexArrays(1, &aabb_vertex_array);
+  glBindVertexArray(aabb_vertex_array);
+
+  // Generate and bind the buffer which shall contain the triangle data.
+  glGenBuffers(1, &aabb_vertex_buffer);
+  glBindBuffer(GL_ARRAY_BUFFER, aabb_vertex_buffer);
+  // The data is not changing rapidly. Therefore we use GL_STATIC_DRAW.
+  glBufferData(
+      GL_ARRAY_BUFFER,
+      aabb_vertices.size() * sizeof(decltype(aabb_vertices)::value_type),
+      aabb_vertices.data(), GL_STATIC_DRAW);
+
+  // Set the data layout of the position and colors
+  // with vertex attribute pointers.
+  glEnableVertexAttribArray(vpos_location);
+  glVertexAttribPointer(vpos_location, 3, GL_FLOAT, GL_FALSE,
+                        sizeof(decltype(aabb_vertices)::value_type), (void*)0);
+
+  // Generate buffer for triangle data.
+  glGenBuffers(1, &aabb_element_buffer);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, aabb_element_buffer);
+  glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+               aabb_edges.size() * sizeof(decltype(aabb_edges)::value_type),
+               aabb_edges.data(), GL_STATIC_DRAW);
 }
 
 void resize() {
@@ -337,30 +455,68 @@ void resize() {
   // Make sure rendering takes place in the full screen.
   glViewport(0, 0, screen_width, screen_height);
   // Use a perspective projection with correct aspect ratio.
-  projection = glm::perspective(45.0f, aspect_ratio, 0.1f, 100.f);
+  projection = glm::perspective(fov, aspect_ratio, 0.1f, 10000.f);
   // Position the camera in space by using a view matrix.
-  view = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -2));
+  // view = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -2));
 }
 
 void update() {
+  glm::vec3 camera{cos(altitude) * cos(azimuth), cos(altitude) * sin(azimuth),
+                   sin(altitude)};
+  camera *= radius;
+  view = glm::lookAt(camera + origin, origin, up);
+  const auto camera_right = normalize(cross(-camera, up));
+  const auto camera_up = normalize(cross(camera_right, -camera));
+  const float pixel_size =
+      2.0f * tan(0.5f * fov * M_PI / 180.0f) / screen_height;
+
+  old_mouse_pos = mouse_pos;
+  double xpos, ypos;
+  glfwGetCursorPos(window, &xpos, &ypos);
+  mouse_pos = glm::vec2{xpos, ypos};
+  const auto mouse_move = mouse_pos - old_mouse_pos;
+
+  int state = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT);
+  if (state == GLFW_PRESS) {
+    altitude += mouse_move.y * 0.01;
+    azimuth -= mouse_move.x * 0.01;
+    constexpr float bound = M_PI_2 - 1e-5f;
+    altitude = clamp(altitude, -bound, bound);
+  }
+  state = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT);
+  if (state == GLFW_PRESS) {
+    const auto scale = 1.3f * pixel_size * length(camera);
+    origin +=
+        -scale * mouse_move.x * camera_right + scale * mouse_move.y * camera_up;
+  }
+
+  // glm::mat4 projection = glm::perspective(fov, ratio, 0.1f, 10000.f);
+
   // Compute and set MVP matrix in shader.
-  model = glm::mat4{1.0f};
-  const auto axis = glm::normalize(glm::vec3(1, 1, 1));
-  model = rotate(model, float(glfwGetTime()), axis);
+  // model = glm::mat4{1.0f};
+  // const auto axis = glm::normalize(glm::vec3(1, 1, 1));
+  // model = rotate(model, float(glfwGetTime()), axis);
   const auto mvp = projection * view * model;
   glUniformMatrix4fv(mvp_location, 1, GL_FALSE, glm::value_ptr(mvp));
 }
 
 void render() {
   // Clear the screen.
-  glClear(GL_COLOR_BUFFER_BIT);
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   // Bind vertex array of triangle
   // and use the created shader
   // to render the triangle.
   glUseProgram(program);
   glBindVertexArray(vertex_array);
-  glDrawArrays(GL_TRIANGLES, 0, 3);
+  glLineWidth(1.5f);
+  glDrawElements(GL_LINES, 2 * edges.size(), GL_UNSIGNED_INT, 0);
+  glBindVertexArray(aabb_vertex_array);
+  glLineWidth(3.0f);
+  glDrawElements(GL_LINES, 3 * 2, GL_UNSIGNED_INT, 0);
+  glLineWidth(1.0f);
+  glDrawElements(GL_LINES, 9 * 2, GL_UNSIGNED_INT,
+                 (void*)(3 * sizeof(decltype(aabb_edges)::value_type)));
 }
 
 }  // namespace detail
