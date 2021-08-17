@@ -1,0 +1,4 @@
+import libs = glm%lib{glm}
+import libs += glbinding%lib{glbinding}
+import libs += glfw3%lib{glfw3}
+exe{pareto-viewer}: {hxx cxx}{**} $libs

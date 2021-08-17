@@ -1,0 +1,18 @@
+: 1
+name: vipo-pareto-viewer
+version: 0.1.0-a.0.z
+project: vipo
+summary: Executable for Rendering Three-Objective Pareto Frontiers
+license: GPL-3.0-or-later
+
+description-file: README.md
+url: https://github.com/lyrahgames/vipo-pareto-viewer
+email: lyrahgames@mailbox.org
+
+depends: * build2 >= 0.13.0
+depends: * bpkg >= 0.13.0
+
+depends: glm ^ 0.9.9
+
+requires: glbinding ^ 3.1.0
+requires: glfw ^ 3.3.4
